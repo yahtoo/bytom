@@ -514,15 +514,15 @@ func submitCreateIssueTransaction(client *rpc.Client, args []string) {
 }
 
 func createControlProgram(client *rpc.Client, args []string) {
-	if len(args) != 0 {
-		fatalln("error:createControlProgram not use args")
+	if len(args) != 1 {
+		fatalln("error:need args:[<account_id>|<account_alias>]")
 	}
 	type Ins struct {
 		Type   string
 		Params stdjson.RawMessage
 	}
 	var ins Ins
-	//TODO:undefined arguments to ins
+	ins.Type = args[0]
 	responses := make([]interface{}, 50)
 	client.Call(context.Background(), "/create-control-program", &[]Ins{ins}, &responses)
 	fmt.Printf("responses:%v\n", responses)
