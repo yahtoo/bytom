@@ -15,7 +15,7 @@ get_vendor_deps: ensure_tools
 	@glide install
 
 ensure_tools:
-	go get $(GOTOOLS)
+	#go get $(GOTOOLS)
 
 # In case of the terrible network condition
 copy:
