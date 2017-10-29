@@ -113,17 +113,16 @@ func (s *Store) LatestSnapshot(ctx context.Context) (*state.Snapshot, uint64, er
 	return getStateSnapshot(ctx, s.db)
 }
 
-/*
 // LatestSnapshotInfo returns the height and size of the most recent
 // state snapshot stored in the database.
 func (s *Store) LatestSnapshotInfo(ctx context.Context) (height uint64, size uint64, err error) {
-	const q = `
-		SELECT height, octet_length(data) FROM snapshots ORDER BY height DESC LIMIT 1
-	`
-	err = s.db.QueryRowContext(ctx, q).Scan(&height, &size)
-	return height, size, err
+	/*	const q = `
+			SELECT height, octet_length(data) FROM snapshots ORDER BY height DESC LIMIT 1
+		`
+		err = s.db.QueryRowContext(ctx, q).Scan(&height, &size)
+		return height, size, err*/
+	return height, size, nil
 }
-*/
 
 // GetSnapshot returns the state snapshot stored at the provided height,
 // in Chain Core's binary protobuf representation. If no snapshot exists

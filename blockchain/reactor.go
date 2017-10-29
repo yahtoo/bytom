@@ -17,13 +17,13 @@ import (
 	"github.com/bytom/encoding/json"
 	"github.com/bytom/log"
 	"github.com/bytom/mining/cpuminer"
+	"github.com/bytom/net/http/httpjson"
 	"github.com/bytom/p2p"
 	"github.com/bytom/protocol"
 	"github.com/bytom/protocol/bc/legacy"
 	"github.com/bytom/types"
 	wire "github.com/tendermint/go-wire"
 	cmn "github.com/tendermint/tmlibs/common"
-	"github.com/bytom/net/http/httpjson"
 
 	"github.com/bytom/errors"
 )
@@ -126,7 +126,6 @@ func (bcr *BlockchainReactor) createblockkey(ctx context.Context) {
 	log.Printf(ctx, "creat-block-key")
 }
 
-
 func maxBytes(h http.Handler) http.Handler {
 	const maxReqSize = 1e7 // 10MB
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
@@ -141,7 +140,7 @@ func maxBytes(h http.Handler) http.Handler {
 
 func (bcr *BlockchainReactor) BuildHander() {
 	m := bcr.mux
-	if bcr.accounts != nil{
+	if bcr.accounts != nil {
 		m.Handle("/create-account", jsonHandler(bcr.createAccount))
 		m.Handle("/update-account-tags", jsonHandler(bcr.updateAccountTags))
 		m.Handle("/create-account-receiver", jsonHandler(bcr.createAccountReceiver))
@@ -174,6 +173,8 @@ func (bcr *BlockchainReactor) BuildHander() {
 	m.Handle("/create-access-token", jsonHandler(bcr.createAccessToken))
 	m.Handle("/list-access-tokens", jsonHandler(bcr.listAccessTokens))
 	m.Handle("/delete-access-token", jsonHandler(bcr.deleteAccessToken))
+
+	m.Handle("get-snapshot-info", jsonHandler(bcr.getSnapshotInfoRPC))
 	//hsm api
 	m.Handle("/create-key", jsonHandler(bcr.pseudohsmCreateKey))
 	m.Handle("/list-keys", jsonHandler(bcr.pseudohsmListKeys))

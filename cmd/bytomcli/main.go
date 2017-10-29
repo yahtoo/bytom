@@ -27,6 +27,7 @@ import (
 	"github.com/bytom/env"
 	"github.com/bytom/errors"
 	"github.com/bytom/log"
+	"github.com/bytom/protocol/bc"
 )
 
 // config vars
@@ -90,6 +91,7 @@ var commands = map[string]*command{
 	"sub-create-issue-tx":     {submitCreateIssueTransaction},
 	"reset-password":          {resetPassword},
 	"update-alias":            {updateAlias},
+	"get-snapshot-info":       {getSnapshotInfoRPC},
 }
 
 func main() {
@@ -803,6 +805,7 @@ func listAccessTokens(client *rpc.Client, args []string) {
 
 	client.Call(context.Background(), "/list-access-token", &[]Token{token}, nil)
 }
+
 func deleteAccessToken(client *rpc.Client, args []string) {
 	if len(args) != 0 {
 		fatalln("error:deleteAccessToken not use args")
@@ -950,4 +953,18 @@ func updateAlias(client *rpc.Client, args []string) {
 	key.NewAlias = args[1]
 	key.XPub = *xpub
 	client.Call(context.Background(), "/update-alias", &key, nil)
+}
+
+func getSnapshotInfoRPC(client *rpc.Client, args []string) {
+	type snapshotInfoResp struct {
+		Height       uint64  `json:"height"`
+		Size         uint64  `json:"size"`
+		BlockchainID bc.Hash `json:"blockchain_id"`
+	}
+	var snapShotInfo snapshotInfoResp
+	snapShotInfo.Height = 1
+	snapShotInfo.Size = 100
+	//	snapShotInfo.BlockchainID
+	resp := make([]interface{}, 0)
+	client.Call(context.Background(), "/get-snapshot-info", &[]snapshotInfoResp{snapShotInfo}, &resp)
 }
