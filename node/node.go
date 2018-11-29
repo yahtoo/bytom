@@ -128,7 +128,7 @@ func NewNode(config *cfg.Config) *Node {
 		cmn.Exit(cmn.Fmt("Failed to get genesis block header: %v", err))
 	}
 
-	sw, err := p2p.NewSwitch(config, genesisHeader.Hash(), *chain.BestBlockHeader())
+	sw, err := p2p.NewSwitch(config, genesisHeader.Hash(), *chain.BestBlockHeader(), p2p.NewDiscover)
 	if err != nil {
 		cmn.Exit(cmn.Fmt("Failed to create p2p switch: %v", err))
 	}
