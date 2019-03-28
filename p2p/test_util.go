@@ -11,7 +11,7 @@ import (
 	cfg "github.com/bytom/config"
 	"github.com/bytom/errors"
 	"github.com/bytom/p2p/connection"
-	"github.com/bytom/p2p/discover"
+	"github.com/bytom/p2p/discover/dht"
 )
 
 //PanicOnAddPeerErr add peer error
@@ -112,7 +112,7 @@ func startSwitches(switches []*Switch) error {
 type mockDiscv struct {
 }
 
-func (m *mockDiscv) ReadRandomNodes(buf []*discover.Node) (n int) {
+func (m *mockDiscv) ReadRandomNodes(buf []*dht.Node) (n int) {
 	return 0
 }
 
