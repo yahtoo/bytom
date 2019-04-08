@@ -9,17 +9,19 @@ import (
 	"github.com/bytom/event"
 	log "github.com/sirupsen/logrus"
 	"github.com/zeroconf"
+	"strings"
+	"time"
 )
 
 const logModule = "p2p/mdns"
 
-type MdnsLanPeerEvent struct {
-	NetID string
-	IP    []net.IP
-	Port  int
+type LanPeerEvent struct {
+	IP   []net.IP
+	Port int
 }
 
 type LanDiscover struct {
+	hasResolver     bool
 	servicePort     int
 	msg             []string
 	entries         chan *zeroconf.ServiceEntry
@@ -28,10 +30,21 @@ type LanDiscover struct {
 	txMsgSub        *event.Subscription
 
 	resolverQuit chan struct{}
+	serviceQuit  chan struct{}
+}
+
+func protocolAndAddress(listenAddr string) (string, string) {
+	p, address := "tcp", listenAddr
+	parts := strings.SplitN(address, "://", 2)
+	if len(parts) == 2 {
+		p, address = parts[0], parts[1]
+	}
+	return p, address
 }
 
 func NewLanDiscover(config *cfg.Config) (*LanDiscover, error) {
-	_, port, err := net.SplitHostPort(config.P2P.ListenAddress)
+	_, addr := protocolAndAddress(config.P2P.ListenAddress)
+	_, port, err := net.SplitHostPort(addr)
 	if err != nil {
 		return nil, err
 	}
@@ -47,40 +60,58 @@ func NewLanDiscover(config *cfg.Config) (*LanDiscover, error) {
 		entries:         make(chan *zeroconf.ServiceEntry),
 		eventDispatcher: event.NewDispatcher(),
 		resolverQuit:    make(chan struct{}),
+		serviceQuit:     make(chan struct{}),
 	}
 
-	if err := ld.registerService(); err != nil {
-		return nil, err
-	}
-
-	if err := ld.registerResolver(); err != nil {
-		return nil, err
-	}
+	go ld.registerServiceRoutine()
 
 	return ld, nil
 }
 
 func (ld *LanDiscover) Stop() {
-	if ld.server != nil {
-		ld.server.Shutdown()
-	}
-
 	close(ld.resolverQuit)
+	close(ld.serviceQuit)
 	ld.eventDispatcher.Stop()
 }
 
 func (ld *LanDiscover) Subscribe() (*event.Subscription, error) {
-	return ld.eventDispatcher.Subscribe(MdnsLanPeerEvent{})
+	sub, err := ld.eventDispatcher.Subscribe(LanPeerEvent{})
+	if err != nil {
+		return nil, err
+	}
+	if !ld.hasResolver {
+		if err = ld.registerResolver(); err != nil {
+			return nil, err
+		}
+		ld.hasResolver = true
+	}
+	return sub, nil
 }
 
-func (ld *LanDiscover) registerService() error {
-	server, err := zeroconf.Register("GoZeroconf", "_workstation._tcp", "local.", ld.servicePort, ld.msg, nil)
+func (ld *LanDiscover) registerServiceRoutine() {
+	ticker := time.NewTicker(1 * time.Hour)
+	defer ticker.Stop()
+	server, err := registerService(ld.servicePort)
 	if err != nil {
 		log.WithFields(log.Fields{"module": logModule, "err": err}).Error("mdns service register error")
-		return err
+		return
 	}
-	ld.server = server
-	return nil
+	for {
+		select {
+		case <-ticker.C:
+			server.Shutdown()
+			if _, err := registerService(ld.servicePort); err != nil {
+				log.WithFields(log.Fields{"module": logModule, "err": err}).Error("mdns service register error")
+				return
+			}
+		case <-ld.serviceQuit:
+			return
+		}
+	}
+}
+
+func registerService(port int) (*zeroconf.Server, error) {
+	return zeroconf.Register("bytomd", "lanDiscv", "local.", port, nil, nil)
 }
 
 func (ld *LanDiscover) registerResolver() error {
@@ -94,7 +125,7 @@ func (ld *LanDiscover) registerResolver() error {
 	}
 
 	ctx := context.Background()
-	err = resolver.Browse(ctx, "_workstation._tcp", "local.", ld.entries)
+	err = resolver.Browse(ctx, "lanDiscv", "local.", ld.entries)
 	if err != nil {
 		log.WithFields(log.Fields{"module": logModule, "err": err}).Error("mdns resolver browse error")
 		close(ld.resolverQuit)
@@ -107,9 +138,9 @@ func (ld *LanDiscover) getLanPeerLoop() {
 	for {
 		select {
 		case entry := <-ld.entries:
-			ld.eventDispatcher.Post(MdnsLanPeerEvent{NetID: entry.Text[0], IP: entry.AddrIPv4, Port: entry.Port})
+			ld.eventDispatcher.Post(LanPeerEvent{IP: entry.AddrIPv4, Port: entry.Port})
 
-		case ld.resolverQuit:
+		case <-ld.resolverQuit:
 			return
 		}
 	}

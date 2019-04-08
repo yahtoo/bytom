@@ -17,8 +17,10 @@ import (
 	"github.com/bytom/consensus"
 	"github.com/bytom/crypto/ed25519"
 	"github.com/bytom/errors"
+	"github.com/bytom/event"
 	"github.com/bytom/p2p/connection"
 	"github.com/bytom/p2p/discover/dht"
+	"github.com/bytom/p2p/discover/mdns"
 	"github.com/bytom/p2p/trust"
 	"github.com/bytom/version"
 )
@@ -29,6 +31,7 @@ const (
 	logModule          = "p2p"
 
 	minNumOutboundPeers = 4
+	maxNumLanPeers      = 5
 )
 
 //pre-define errors for connecting fail
@@ -41,6 +44,10 @@ var (
 
 type discv interface {
 	ReadRandomNodes(buf []*dht.Node) (n int)
+}
+
+type lanDiscv interface {
+	Subscribe() (*event.Subscription, error)
 }
 
 // Switch handles peer connections and exposes an API to receive incoming messages
@@ -61,6 +68,7 @@ type Switch struct {
 	nodeInfo     *NodeInfo             // our node info
 	nodePrivKey  crypto.PrivKeyEd25519 // our node privkey
 	discv        discv
+	lanDiscv     lanDiscv
 	bannedPeer   map[string]time.Time
 	db           dbm.DB
 	mtx          sync.Mutex
@@ -72,6 +80,7 @@ func NewSwitch(config *cfg.Config) (*Switch, error) {
 	var l Listener
 	var listenAddr string
 	var discv *dht.Network
+	var lanDiscv *mdns.LanDiscover
 
 	blacklistDB := dbm.NewDB("trusthistory", config.DBBackend, config.DBDir())
 	config.P2P.PrivateKey, err = config.NodeKey()
@@ -94,13 +103,18 @@ func NewSwitch(config *cfg.Config) (*Switch, error) {
 		if err != nil {
 			return nil, err
 		}
+
+		if lanDiscv, err = mdns.NewLanDiscover(config); err != nil {
+			//todo close lanDiscv
+			log.WithFields(log.Fields{"module": logModule, "err": err}).Warning("create lan discover error")
+		}
 	}
 
-	return newSwitch(config, discv, blacklistDB, l, privKey, listenAddr)
+	return newSwitch(config, discv, lanDiscv, blacklistDB, l, privKey, listenAddr)
 }
 
 // newSwitch creates a new Switch with the given config.
-func newSwitch(config *cfg.Config, discv discv, blacklistDB dbm.DB, l Listener, priv crypto.PrivKeyEd25519, listenAddr string) (*Switch, error) {
+func newSwitch(config *cfg.Config, discv discv, lanDiscv lanDiscv, blacklistDB dbm.DB, l Listener, priv crypto.PrivKeyEd25519, listenAddr string) (*Switch, error) {
 	sw := &Switch{
 		Config:       config,
 		peerConfig:   DefaultPeerConfig(config.P2P),
@@ -111,6 +125,7 @@ func newSwitch(config *cfg.Config, discv discv, blacklistDB dbm.DB, l Listener, 
 		dialing:      cmn.NewCMap(),
 		nodePrivKey:  priv,
 		discv:        discv,
+		lanDiscv:     lanDiscv,
 		db:           blacklistDB,
 		nodeInfo:     NewNodeInfo(config, priv.PubKey().Unwrap().(crypto.PubKeyEd25519), listenAddr),
 		bannedPeer:   make(map[string]time.Time),
@@ -136,6 +151,10 @@ func (sw *Switch) OnStart() error {
 		go sw.listenerRoutine(listener)
 	}
 	go sw.ensureOutboundPeersRoutine()
+	//nil
+	if sw.lanDiscv != nil {
+		go sw.connectLanPeersRoutine()
+	}
 	return nil
 }
 
@@ -285,13 +304,16 @@ func (sw *Switch) Listeners() []Listener {
 }
 
 // NumPeers Returns the count of outbound/inbound and outbound-dialing peers.
-func (sw *Switch) NumPeers() (outbound, inbound, dialing int) {
+func (sw *Switch) NumPeers() (lan, outbound, inbound, dialing int) {
 	peers := sw.peers.List()
 	for _, peer := range peers {
 		if peer.outbound {
 			outbound++
 		} else {
 			inbound++
+		}
+		if peer.isLan {
+			lan++
 		}
 	}
 	dialing = sw.dialing.Size()
@@ -356,6 +378,64 @@ func (sw *Switch) checkBannedPeer(peer string) error {
 		}
 	}
 	return nil
+}
+
+func (sw *Switch) connectLanPeers(lanPeer mdns.LanPeerEvent) {
+	lanPeers, _, _, numDialing := sw.NumPeers()
+	numToDial := (maxNumLanPeers - (lanPeers + numDialing))
+	log.WithFields(log.Fields{"module": logModule, "numDialing": numDialing, "numToDial": numToDial}).Debug("connect lan peers")
+	if numToDial <= 0 {
+		return
+	}
+
+	connectedPeers := make(map[string]struct{})
+	for _, peer := range sw.Peers().List() {
+		connectedPeers[peer.remoteAddrHost()] = struct{}{}
+	}
+
+	var wg sync.WaitGroup
+	for i := 0; i < len(lanPeer.IP); i++ {
+		try := NewNetAddressIPPort(lanPeer.IP[i], uint16(lanPeer.Port))
+		if sw.NodeInfo().ListenAddr == try.String() {
+			continue
+		}
+		if dialling := sw.IsDialing(try); dialling {
+			continue
+		}
+		if _, ok := connectedPeers[try.IP.String()]; ok {
+			continue
+		}
+
+		wg.Add(1)
+		go sw.dialPeerWorker(try, &wg)
+	}
+	wg.Wait()
+}
+
+func (sw *Switch) connectLanPeersRoutine() {
+	lanPeerEventSub, err := sw.lanDiscv.Subscribe()
+	if err != nil {
+		log.WithFields(log.Fields{"module": logModule, "err": err}).Warning("subscribe Lan Peer Event error")
+		return
+	}
+
+	for {
+		select {
+		case obj, ok := <-lanPeerEventSub.Chan():
+			if !ok {
+				log.WithFields(log.Fields{"module": logModule}).Warning("lan peer event subscription channel closed")
+				return
+			}
+			lanPeer, ok := obj.Data.(mdns.LanPeerEvent)
+			if !ok {
+				log.WithFields(log.Fields{"module": logModule}).Error("event type error")
+				continue
+			}
+			sw.connectLanPeers(lanPeer)
+		case <-sw.Quit:
+			return
+		}
+	}
 }
 
 func (sw *Switch) delBannedPeer(addr string) error {

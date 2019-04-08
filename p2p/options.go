@@ -1,10 +1,5 @@
 package p2p
 
-import (
-	"github.com/libp2p/go-libp2p-interface-connmgr"
-	"github.com/libp2p/go-libp2p-pnet"
-)
-
 // ListenAddrStrings configures libp2p to listen on the given (unparsed)
 // addresses.
 //func ListenAddrStrings(s ...string) Option {
